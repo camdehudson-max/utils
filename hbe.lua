@@ -4,27 +4,127 @@ if not getgenv().MTAPIMutex then
     loadstring(game:HttpGet("https://raw.githubusercontent.com/camdehudson-max/utils/refs/heads/main/core.lua", true))()
 end
 
-local Library    = loadstring(game:HttpGet("https://raw.githubusercontent.com/RectangularObject/LinoriaLib/main/Library.lua"))()
-local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/RectangularObject/LinoriaLib/main/addons/SaveManager.lua"))()
-SaveManager:SetLibrary(Library)
-SaveManager:SetFolder("HBE")
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Teams            = game:GetService("Teams")
+local Workspace        = game:GetService("Workspace")
+local lPlayer          = Players.LocalPlayer
 
-local Teams      = game:GetService("Teams")
-local Players    = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local Workspace  = game:GetService("Workspace")
-local lPlayer    = Players.LocalPlayer
-local players    = {}
+local enabled     = false
+local hitboxSize  = 10
+local showUI      = true
+local connections = {}
+local players     = {}
 local defaultProps = {}
 
--- ─── helpers ────────────────────────────────────────────────────────────────
+-- ─── settings (edit these) ───────────────────────────────────────────────────
+local TRANSPARENCY  = 1    -- 1 = invisible, 0 = solid
+local IGNORE_TEAM   = true -- ignore own team
+local IGNORE_DEAD   = true -- ignore dead players
+local IGNORE_SIT    = true -- ignore sitting players
+local IGNORE_FF     = true -- ignore forcefielded players
 
-local function updateList(list)
-    list:SetValues()
-    list:Display()
+-- ─── Drawing UI ──────────────────────────────────────────────────────────────
+
+local BG = Drawing.new("Square")
+BG.Filled      = true
+BG.Color       = Color3.fromRGB(15, 15, 15)
+BG.Transparency = 0.45
+BG.Size        = Vector2.new(130, 70)
+
+local Border = Drawing.new("Square")
+Border.Filled      = false
+Border.Color       = Color3.fromRGB(60, 60, 60)
+Border.Transparency = 1
+Border.Thickness   = 1
+Border.Size        = Vector2.new(130, 70)
+
+local TitleText = Drawing.new("Text")
+TitleText.Size  = 14
+TitleText.Font  = Drawing.Fonts.UI
+TitleText.Color = Color3.fromRGB(180, 180, 180)
+TitleText.Outline = true
+TitleText.Text  = "HITBOX EXTENDER"
+
+local Divider = Drawing.new("Line")
+Divider.Color       = Color3.fromRGB(60, 60, 60)
+Divider.Transparency = 1
+Divider.Thickness   = 1
+
+local StatusText = Drawing.new("Text")
+StatusText.Size   = 13
+StatusText.Font   = Drawing.Fonts.UI
+StatusText.Color  = Color3.fromRGB(255, 80, 80)
+StatusText.Outline = false
+StatusText.Text   = "HB * OFF"
+
+local SizeText = Drawing.new("Text")
+SizeText.Size   = 13
+SizeText.Font   = Drawing.Fonts.UI
+SizeText.Color  = Color3.fromRGB(150, 150, 150)
+SizeText.Outline = false
+SizeText.Text   = "SIZE: " .. hitboxSize
+
+local TransText = Drawing.new("Text")
+TransText.Size   = 13
+TransText.Font   = Drawing.Fonts.UI
+TransText.Color  = Color3.fromRGB(150, 150, 150)
+TransText.Outline = false
+TransText.Text   = "TRANS: " .. TRANSPARENCY
+
+local function updateUI()
+    if enabled then
+        StatusText.Text  = "HB * ON"
+        StatusText.Color = Color3.fromRGB(80, 255, 80)
+        Border.Color     = Color3.fromRGB(80, 255, 80)
+    else
+        StatusText.Text  = "HB * OFF"
+        StatusText.Color = Color3.fromRGB(255, 80, 80)
+        Border.Color     = Color3.fromRGB(60, 60, 60)
+    end
+    SizeText.Text  = "SIZE: " .. hitboxSize
+    TransText.Text = "TRANS: " .. string.format("%.1f", TRANSPARENCY)
 end
 
+local function setUIVisible(v)
+    BG.Visible      = v
+    Border.Visible  = v
+    TitleText.Visible = v
+    Divider.Visible = v
+    StatusText.Visible = v
+    SizeText.Visible = v
+    TransText.Visible = v
+end
+
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    local vp = Workspace.CurrentCamera.ViewportSize
+    local w, h = 130, 70
+    local x = vp.X - w - 10
+    local y = vp.Y - h - 10
+
+    BG.Size     = Vector2.new(w, h)
+    Border.Size = Vector2.new(w, h)
+    BG.Position     = Vector2.new(x, y)
+    Border.Position = Vector2.new(x, y)
+
+    local tw = TitleText.TextBounds.X
+    TitleText.Position = Vector2.new(x + (w - tw) / 2, y + 6)
+
+    Divider.From = Vector2.new(x + 1,   y + 22)
+    Divider.To   = Vector2.new(x + w - 1, y + 22)
+
+    StatusText.Position = Vector2.new(x + 8, y + 27)
+    SizeText.Position   = Vector2.new(x + 8, y + 43)
+    TransText.Position  = Vector2.new(x + 8, y + 57)
+
+    setUIVisible(showUI)
+end))
+
+-- ─── team / state checks ─────────────────────────────────────────────────────
+
 local function isTeammate(player, playerChar)
+    if not IGNORE_TEAM then return false end
     local placeId = game.PlaceId
     local gameId  = game.GameId
     if gameId == 718936923 then
@@ -87,6 +187,7 @@ local function isTeammate(player, playerChar)
 end
 
 local function isDead(player, playerChar)
+    if not IGNORE_DEAD then return false end
     if not playerChar then return true end
     local humanoid = playerChar:FindFirstChildWhichIsA("Humanoid")
     if game.PlaceId == 6172932937 then
@@ -99,79 +200,32 @@ local function isDead(player, playerChar)
 end
 
 local function isSitting(playerChar)
-    if not playerChar then return false end
+    if not IGNORE_SIT or not playerChar then return false end
     local humanoid = playerChar:FindFirstChildWhichIsA("Humanoid")
-    return Toggles.extenderSitCheck.Value and humanoid ~= nil and humanoid.Sit == true
+    return humanoid ~= nil and humanoid.Sit == true
 end
 
 local function isFFed(playerChar)
-    if not playerChar then return false end
+    if not IGNORE_FF or not playerChar then return false end
     if game.PlaceId == 4991214437 or game.PlaceId == 6652350934 then
         local head = playerChar:FindFirstChild("Head")
         return head and head.Material == Enum.Material.ForceField or false
     end
     local ff = playerChar:FindFirstChildWhichIsA("ForceField")
-    return Toggles.extenderFFCheck.Value and ff ~= nil and ff.Visible == true
+    return ff ~= nil and ff.Visible == true
 end
 
--- ─── UI ─────────────────────────────────────────────────────────────────────
+-- ─── local collision fix (walk inside hitboxes) ──────────────────────────────
 
-local mainWindow      = Library:CreateWindow("Hitbox Extender")
-local mainTab         = mainWindow:AddTab("Main")
-local mainGroupbox    = mainTab:AddLeftGroupbox("Hitbox Extender")
-local ignoresGroupbox = mainTab:AddRightGroupbox("Ignores")
-local collGroupbox    = mainTab:AddRightGroupbox("Collisions")
-local miscGroupbox    = mainTab:AddLeftGroupbox("Keybinds")
-
-mainGroupbox:AddToggle("extenderToggled",      { Text = "Toggle" })
-mainGroupbox:AddSlider("extenderSize",         { Text = "Size",         Min = 2, Max = 100, Default = 10,  Rounding = 1 })
-mainGroupbox:AddSlider("extenderTransparency", { Text = "Transparency", Min = 0, Max = 1,   Default = 1,   Rounding = 2 })
-mainGroupbox:AddInput("customPartName",        { Text = "Custom Part Name", Default = "HeadHB" })
-mainGroupbox:AddDropdown("extenderPartList",   { Text = "Body Parts", AllowNull = true, Multi = true,
-    Values = { "Custom Part", "Head", "HumanoidRootPart", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg" },
-    Default = "HumanoidRootPart" })
-
-ignoresGroupbox:AddToggle("extenderSitCheck",            { Text = "Ignore Sitting Players" })
-ignoresGroupbox:AddToggle("extenderFFCheck",             { Text = "Ignore Forcefielded Players" })
-ignoresGroupbox:AddToggle("ignoreSelectedPlayersToggled",{ Text = "Ignore Selected Players" })
-ignoresGroupbox:AddDropdown("ignorePlayerList",          { Text = "Players", AllowNull = true, Multi = true, Values = {} })
-ignoresGroupbox:AddToggle("ignoreOwnTeamToggled",        { Text = "Ignore Own Team" })
-ignoresGroupbox:AddToggle("ignoreSelectedTeamsToggled",  { Text = "Ignore Selected Teams" })
-ignoresGroupbox:AddDropdown("ignoreTeamList",            { Text = "Teams", AllowNull = true, Multi = true, Values = {} })
-
-collGroupbox:AddToggle("collisionsToggled", { Text = "Enable Collisions" })
-
-miscGroupbox:AddLabel("Toggle UI"):AddKeyPicker("menuKeybind",       { Default = "End",  NoUI = true, Text = "Menu Keybind" })
-miscGroupbox:AddLabel("Force Update"):AddKeyPicker("forceUpdateKeybind", { Default = "Home", NoUI = true, Text = "Force Update Keybind" })
-Library.ToggleKeybind = Options.menuKeybind
-
-SaveManager:BuildConfigSection(mainTab)
-SaveManager:LoadAutoloadConfig()
-
--- ─── local player collision fix (lets you walk inside hitboxes) ──────────────
-
-local function disableLocalCollisions()
+local function setLocalCollisions(state)
     local char = lPlayer.Character
     if not char then return end
     for _, part in pairs(char:GetDescendants()) do
         if part:IsA("BasePart") then
-            pcall(function() part.CanCollide = false end)
+            pcall(function() part.CanCollide = state end)
         end
     end
 end
-
-local function enableLocalCollisions()
-    local char = lPlayer.Character
-    if not char then return end
-    for _, part in pairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            pcall(function() part.CanCollide = true end)
-        end
-    end
-end
-
-Toggles.extenderToggled:GetPropertyChangedSignal and nil
--- applied every frame below instead
 
 -- ─── hitbox logic ────────────────────────────────────────────────────────────
 
@@ -189,88 +243,56 @@ local function storeDefaults(player, char)
     end
 end
 
-local function isPartActive(partName)
-    for _, v in pairs(Options.extenderPartList:GetActiveValues()) do
-        if partName == v then return true end
-        if v == "Custom Part" and string.match(partName, Options.customPartName.Value) then return true end
-        if v == "Left Arm"  and string.match(partName,"Left")  and (string.match(partName,"Arm")  or string.match(partName,"Hand")) then return true end
-        if v == "Right Arm" and string.match(partName,"Right") and (string.match(partName,"Arm")  or string.match(partName,"Hand")) then return true end
-        if v == "Left Leg"  and string.match(partName,"Left")  and (string.match(partName,"Leg")  or string.match(partName,"Foot")) then return true end
-        if v == "Right Leg" and string.match(partName,"Right") and (string.match(partName,"Leg")  or string.match(partName,"Foot")) then return true end
-    end
-    return false
-end
-
 local function applyToChar(player, char)
     if not char or not defaultProps[player] then return end
-    local ignored = (Toggles.ignoreOwnTeamToggled.Value and isTeammate(player, char))
-        or (Toggles.ignoreSelectedTeamsToggled.Value and table.find(Options.ignoreTeamList:GetActiveValues(), tostring(player.Team)))
-        or (Toggles.ignoreSelectedPlayersToggled.Value and table.find(Options.ignorePlayerList:GetActiveValues(), player.Name))
-    local shouldApply = Toggles.extenderToggled.Value
-        and not ignored
+    local shouldApply = enabled
+        and not isTeammate(player, char)
         and not isSitting(char)
         and not isFFed(char)
         and not isDead(player, char)
 
-    for _, part in pairs(char:GetChildren()) do
-        if part:IsA("BasePart") then
-            local stored = defaultProps[player][part.Name]
-            if not stored then
-                stored = { Size = part.Size, Transparency = part.Transparency, CanCollide = part.CanCollide, Massless = part.Massless }
-                defaultProps[player][part.Name] = stored
-            end
-            if shouldApply and isPartActive(part.Name) then
-                local s = Options.extenderSize.Value
-                pcall(function()
-                    part.Size         = Vector3.new(s, s, s)
-                    part.Transparency = Options.extenderTransparency.Value
-                    part.CanCollide   = false
-                    part.Massless     = part.Name ~= "HumanoidRootPart" and true or part.Massless
-                    if part.Name == "Head" then
-                        local face = part:FindFirstChild("face")
-                        if face then face.Transparency = Options.extenderTransparency.Value end
-                    end
-                end)
-            else
-                pcall(function()
-                    part.Size         = stored.Size
-                    part.Transparency = stored.Transparency
-                    part.CanCollide   = stored.CanCollide
-                    part.Massless     = stored.Massless
-                    if part.Name == "Head" then
-                        local face = part:FindFirstChild("face")
-                        if face then face.Transparency = stored.Transparency end
-                    end
-                end)
-            end
-        end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local stored = defaultProps[player]["HumanoidRootPart"]
+    if not stored then
+        stored = { Size = hrp.Size, Transparency = hrp.Transparency, CanCollide = hrp.CanCollide, Massless = hrp.Massless }
+        defaultProps[player]["HumanoidRootPart"] = stored
+    end
+
+    if shouldApply then
+        pcall(function()
+            hrp.Size         = Vector3.new(hitboxSize, hitboxSize, hitboxSize)
+            hrp.Transparency = TRANSPARENCY
+            hrp.CanCollide   = false
+        end)
+    else
+        pcall(function()
+            hrp.Size         = stored.Size
+            hrp.Transparency = stored.Transparency
+            hrp.CanCollide   = stored.CanCollide
+        end)
     end
 end
 
 local function resetChar(player, char)
     if not char or not defaultProps[player] then return end
-    for _, part in pairs(char:GetChildren()) do
-        if part:IsA("BasePart") then
-            local stored = defaultProps[player][part.Name]
-            if stored then
-                pcall(function()
-                    part.Size         = stored.Size
-                    part.Transparency = stored.Transparency
-                    part.CanCollide   = stored.CanCollide
-                    part.Massless     = stored.Massless
-                end)
-            end
-        end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local stored = defaultProps[player]["HumanoidRootPart"]
+    if stored then
+        pcall(function()
+            hrp.Size         = stored.Size
+            hrp.Transparency = stored.Transparency
+            hrp.CanCollide   = stored.CanCollide
+        end)
     end
 end
 
--- ─── player tracking ────────────────────────────────────────────────────────
+-- ─── player tracking ─────────────────────────────────────────────────────────
 
 local function addPlayer(player)
     if players[player] or player == lPlayer then return end
-    table.insert(Options.ignorePlayerList.Values, player.Name)
-    updateList(Options.ignorePlayerList)
-
     local entry = { char = player.Character }
     players[player] = entry
 
@@ -281,7 +303,6 @@ local function addPlayer(player)
         task.wait()
         storeDefaults(player, char)
         applyToChar(player, char)
-
         local humanoid = char:FindFirstChildWhichIsA("Humanoid")
         if humanoid then
             humanoid:GetPropertyChangedSignal("Health"):Connect(function()
@@ -298,12 +319,6 @@ local function addPlayer(player)
         char.ChildRemoved:Connect(function(child)
             if child:IsA("ForceField") then applyToChar(player, char) end
         end)
-        if game.PlaceId == 4991214437 or game.PlaceId == 6652350934 then
-            local head = char:FindFirstChild("Head")
-            if head then
-                head:GetPropertyChangedSignal("Material"):Connect(function() applyToChar(player, char) end)
-            end
-        end
     end
 
     player.CharacterAdded:Connect(onCharAdded)
@@ -331,13 +346,8 @@ local function removePlayer(player)
     if not players[player] then return end
     resetChar(player, players[player].char)
     defaultProps[player] = nil
-    local idx = table.find(Options.ignorePlayerList.Values, player.Name)
-    if idx then table.remove(Options.ignorePlayerList.Values, idx) end
-    updateList(Options.ignorePlayerList)
     players[player] = nil
 end
-
--- ─── update all ─────────────────────────────────────────────────────────────
 
 local function updateAll()
     for player, entry in pairs(players) do
@@ -345,72 +355,98 @@ local function updateAll()
     end
 end
 
--- ─── render loop — every frame, no throttle ──────────────────────────────────
+-- ─── render loop ─────────────────────────────────────────────────────────────
 
-RunService:BindToRenderStep("HBE", Enum.RenderPriority.Camera.Value - 1, function()
-    if not Toggles.extenderToggled.Value then
-        enableLocalCollisions()
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    if not enabled then
+        setLocalCollisions(true)
         return
     end
-    disableLocalCollisions()
+    setLocalCollisions(false)
     for player, entry in pairs(players) do
-        if entry.char then
-            applyToChar(player, entry.char)
-        end
+        if entry.char then applyToChar(player, entry.char) end
     end
-end)
+end))
 
--- ─── UI callbacks ────────────────────────────────────────────────────────────
+-- ─── keybinds ────────────────────────────────────────────────────────────────
 
-Options.forceUpdateKeybind:OnClick(updateAll)
-Toggles.extenderToggled:OnChanged(updateAll)
-Options.extenderSize:OnChanged(updateAll)
-Options.extenderTransparency:OnChanged(updateAll)
-Options.customPartName:OnChanged(updateAll)
-Options.extenderPartList:OnChanged(updateAll)
-Toggles.extenderSitCheck:OnChanged(updateAll)
-Toggles.extenderFFCheck:OnChanged(updateAll)
-Toggles.ignoreSelectedPlayersToggled:OnChanged(updateAll)
-Options.ignorePlayerList:OnChanged(updateAll)
-Toggles.ignoreOwnTeamToggled:OnChanged(updateAll)
-Toggles.ignoreSelectedTeamsToggled:OnChanged(updateAll)
-Options.ignoreTeamList:OnChanged(updateAll)
-Toggles.collisionsToggled:OnChanged(updateAll)
+table.insert(connections, UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
 
--- ─── population ─────────────────────────────────────────────────────────────
+    if input.KeyCode == Enum.KeyCode.X then
+        enabled = not enabled
+        if not enabled then updateAll() end
+        updateUI()
+
+    elseif input.KeyCode == Enum.KeyCode.LeftAlt then
+        showUI = not showUI
+
+    elseif input.KeyCode == Enum.KeyCode.RightBracket then
+        hitboxSize = hitboxSize + 2
+        updateUI()
+
+    elseif input.KeyCode == Enum.KeyCode.Minus then
+        hitboxSize = math.max(2, hitboxSize - 2)
+        updateUI()
+
+    elseif input.KeyCode == Enum.KeyCode.Equals then
+        TRANSPARENCY = math.max(0, TRANSPARENCY - 0.1)
+        updateUI()
+
+    elseif input.KeyCode == Enum.KeyCode.LeftBracket then
+        TRANSPARENCY = math.min(1, TRANSPARENCY + 0.1)
+        updateUI()
+
+    elseif input.KeyCode == Enum.KeyCode.RightShift then
+        enabled = false
+        updateAll()
+        setLocalCollisions(true)
+        for _, c in ipairs(connections) do c:Disconnect() end
+        BG:Remove(); Border:Remove(); TitleText:Remove()
+        Divider:Remove(); StatusText:Remove(); SizeText:Remove(); TransText:Remove()
+    end
+end))
+
+-- middle mouse suppress
+table.insert(connections, UserInputService.InputBegan:Connect(function(input, gp)
+    if not gp and input.UserInputType == Enum.UserInputType.MouseButton3 then
+        enabled = false
+        updateAll()
+        updateUI()
+    end
+end))
+
+table.insert(connections, UserInputService.InputEnded:Connect(function(input, gp)
+    if not gp and input.UserInputType == Enum.UserInputType.MouseButton3 then
+        enabled = true
+        updateUI()
+    end
+end))
+
+-- FOV binds
+local fovBinds = {
+    [Enum.KeyCode.End]      = 120,
+    [Enum.KeyCode.Delete]   = 60,
+    [Enum.KeyCode.PageUp]   = 72,
+    [Enum.KeyCode.PageDown] = 92,
+}
+table.insert(connections, UserInputService.InputBegan:Connect(function(input, gp)
+    if not gp and fovBinds[input.KeyCode] then
+        Workspace.CurrentCamera.FieldOfView = fovBinds[input.KeyCode]
+    end
+end))
+
+-- ─── population ──────────────────────────────────────────────────────────────
 
 for _, player in ipairs(Players:GetPlayers()) do addPlayer(player) end
-
-for _, team in pairs(Teams:GetTeams()) do
-    if team:IsA("Team") then
-        table.insert(Options.ignoreTeamList.Values, team.Name)
-        updateList(Options.ignoreTeamList)
-    end
-end
 
 Players.PlayerAdded:Connect(addPlayer)
 Players.PlayerRemoving:Connect(removePlayer)
 
-Teams.ChildAdded:Connect(function(team)
-    if team:IsA("Team") then
-        table.insert(Options.ignoreTeamList.Values, team.Name)
-        updateList(Options.ignoreTeamList)
-    end
-end)
-Teams.ChildRemoved:Connect(function(team)
-    if team:IsA("Team") then
-        local idx = table.find(Options.ignoreTeamList.Values, team.Name)
-        if idx then table.remove(Options.ignoreTeamList.Values, idx) end
-        updateList(Options.ignoreTeamList)
-    end
-end)
-
-lPlayer:GetAttributeChangedSignal("Team"):Connect(updateAll)
 lPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     updateAll()
 end)
 
 updateAll()
-Library:Notify("Hitbox Extender loaded")
-Library:Notify("Press " .. Library.ToggleKeybind.Value .. " to toggle menu")
+updateUI()
